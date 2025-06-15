@@ -33,7 +33,7 @@ fn handle_connection(mut stream: TcpStream) {
 
     let (status_line, content) = if request_line == "GET / HTTP/1.1" {
         ("HTTP/1.1 200 OK", "")
-        } else if content.is_some() {
+        } else if request_line.contains("/echo") {
         println!("{}",content.unwrap());
             ("HTTP/1.1 200 OK", content.unwrap())
         } else {
@@ -45,3 +45,4 @@ fn handle_connection(mut stream: TcpStream) {
 
     stream.write_all(response.as_bytes()).unwrap();
 }
+
