@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::{
-    io::{BufReader, prelude::*},
+    io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
 };
 
@@ -26,14 +26,16 @@ fn main() {
 }
 
 fn handle_connection(mut stream: TcpStream) {
-   let buf_reader = BufReader::new(&stream);
-   let _http_request: Vec<_> = buf_reader
-       .lines()
-       .map(|result| result.unwrap())
-       .take_while(|line| !line.is_empty())
-       .collect();
+    let buf_reader = BufReader::new(&stream);
+    let request_line = buf_reader.lines().next().unwrap().unwrap();
 
-    let response = "HTTP/1.1 200 OK\r\n\r\n";
+    let response = if request_line == "GET / HTTP/1.1" {
+        let status_line = "HTTP/1.1 200 OK";
+        format!("{status_line}\r\n\r\n")
+    } else {
+        let status_line = "HTTP/1.1 404 Not Found";
+        format!("{status_line}\r\n\r\n")
+    };
 
     stream.write_all(response.as_bytes()).unwrap();
 }
