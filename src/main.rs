@@ -28,14 +28,20 @@ fn main() {
 fn handle_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&stream);
     let request_line = buf_reader.lines().next().unwrap().unwrap();
+    let echo = request_line.split("echo/");
+    let content = echo.last().unwrap().split_whitespace().next();
 
-    let response = if request_line == "GET / HTTP/1.1" {
-        let status_line = "HTTP/1.1 200 OK";
-        format!("{status_line}\r\n\r\n")
-    } else {
-        let status_line = "HTTP/1.1 404 Not Found";
-        format!("{status_line}\r\n\r\n")
-    };
+    let (status_line, content) = if request_line == "GET / HTTP/1.1" {
+        ("HTTP/1.1 200 OK", "")
+        } else if content.is_some() {
+        println!("{}",content.unwrap());
+            ("HTTP/1.1 200 OK", content.unwrap())
+        } else {
+            ("HTTP/1.1 404 Not Found", "")
+        };
+
+    let content_length = content.len();
+    let response = format!("{status_line}\r\nContent-Type: text/plain\r\nContent-Length: {content_length}\r\n\r\n{content}");
 
     stream.write_all(response.as_bytes()).unwrap();
 }
