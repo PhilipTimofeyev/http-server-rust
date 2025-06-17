@@ -45,9 +45,10 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
     let (content, status) = parse_endpoint(start_line, &headers[..], &dir, &body);
 
     let response = format!(
-        "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
+        "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n{}",
         status.as_str(),
         content.content_type,
+        content.encoding,
         content.length,
         content.content
     );
@@ -89,7 +90,7 @@ fn parse_args(args: Vec<String>) -> String {
 fn parse_request(request: &[u8]) -> (Vec<String>, String) {
     let mut request: Vec<String> = request.lines().map(|result| result.unwrap()).collect();
 
-    let body = request.split_off(request.len() - 1).remove(0);
+    let body = request.split_off(request.len() - 1).pop().unwrap();
     let headers = request;
 
     (headers, body)
@@ -98,10 +99,10 @@ fn parse_request(request: &[u8]) -> (Vec<String>, String) {
 fn parse_start_line(start_line: String) -> StartLine {
     let mut start_line: Vec<&str> = start_line.split_whitespace().collect();
 
-    let (verb, endpoint, _html) = (
-        start_line.remove(0),
-        start_line.remove(0).to_string(),
-        start_line.remove(0).to_string(),
+    let (_html, endpoint, verb) = (
+        start_line.pop().unwrap().to_string(),
+        start_line.pop().unwrap().to_string(),
+        start_line.pop().unwrap(),
     );
 
     let verb = match verb {
@@ -114,15 +115,30 @@ fn parse_start_line(start_line: String) -> StartLine {
 }
 
 fn parse_content_type(headers: &[String]) -> String {
-    if let Some(content_type_idx) = headers
+    if let Some(content_type) = headers
         .iter()
-        .position(|header| header.contains("Content-Type"))
+        .find(|header| header.contains("Content-Type"))
     {
-        let content_type = &headers[content_type_idx];
         let (_key, content_type) = content_type.split_once(": ").unwrap();
         content_type.to_string()
     } else {
         "application/octet-stream".to_string()
+    }
+}
+
+fn parse_encoding(headers: &[String]) -> String {
+    if let Some(encoding) = headers
+        .iter()
+        .find(|header| header.contains("Accept-Encoding"))
+    {
+        let (_key, encoding) = encoding.split_once(": ").unwrap();
+        match encoding {
+            "gzip" => encoding.to_string(),
+            _ => "".to_string()
+
+        }
+    } else {
+        "".to_string()
     }
 }
 
@@ -132,17 +148,18 @@ fn parse_endpoint(
     dir: &str,
     body: &str,
 ) -> (Content, StatusCode) {
+    let encoding = parse_encoding(headers);
     let (content, status) = match start_line.endpoint.as_str() {
-        "/" => (Content::new("", ""), StatusCode::_200),
+        "/" => (Content::new("", "", &encoding), StatusCode::_200),
         "/user-agent" => {
             let user_agent = headers.iter().find(|el| el.contains("User-Agent"));
             let (_key, user_agent) = user_agent.unwrap().split_once(": ").unwrap();
-            let content = Content::new(user_agent, "text/plain");
+            let content = Content::new(user_agent, "text/plain", &encoding);
             (content, StatusCode::_200)
         }
         endpoint if endpoint.contains("/echo") => {
             let message = endpoint.split("/echo/").last().unwrap();
-            let content = Content::new(message, "text/plain");
+            let content = Content::new(message, "text/plain", &encoding);
             (content, StatusCode::_200)
         }
         endpoint if endpoint.contains("/files") => {
@@ -155,20 +172,20 @@ fn parse_endpoint(
                     let read_file = fs::read_to_string(filepath);
                     let content_type = parse_content_type(headers);
                     if let Ok(read_file) = read_file {
-                        let content = Content::new(&read_file, &content_type);
+                        let content = Content::new(&read_file, &content_type, &encoding);
                         (content, StatusCode::_200)
                     } else {
-                        (Content::new("", ""), StatusCode::_404)
+                        (Content::new("", "", &encoding), StatusCode::_404)
                     }
                 }
                 Verb::POST => {
                     let _ = fs::write(filepath, body);
-                    (Content::new("", ""), StatusCode::_201)
+                    (Content::new("", "", &encoding), StatusCode::_201)
                 }
             }
         }
         _ => {
-            return (Content::new("", ""), StatusCode::_404);
+            return (Content::new("", "", &encoding), StatusCode::_404);
         }
     };
     (content, status)
@@ -183,18 +200,21 @@ struct Content {
     content: String,
     content_type: String,
     length: usize,
+    encoding: String
 }
 
 impl Content {
-    fn new(content: &str, content_type: &str) -> Content {
+    fn new(content: &str, content_type: &str, encoding: &str) -> Content {
         let content = content.to_string();
         let content_type = content_type.to_string();
         let length = content.len();
+        let encoding = encoding.to_string();
 
         Content {
             content,
             content_type,
             length,
+            encoding,
         }
     }
 }
