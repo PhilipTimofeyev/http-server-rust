@@ -1,8 +1,8 @@
 use codecrafters_http_server::ThreadPool;
 use std::{
+    collections::HashMap,
     env, fs,
     io::{prelude::*, BufReader},
-    collections::HashMap,
     net::{TcpListener, TcpStream},
     path::Path,
     sync::Arc,
@@ -33,8 +33,6 @@ fn main() {
         }
     }
 }
-
-
 
 fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
     let mut buf_reader = BufReader::new(&stream);
@@ -130,16 +128,22 @@ impl Request {
 
         match content_type {
             Some(content_type) => content_type.to_string(),
-            None => "application/octet-stream".to_string()
+            None => "application/octet-stream".to_string(),
         }
     }
 
     fn parse_encoding(&self) -> String {
         let encoding = self.headers.get("Accept-Encoding");
-        
-                match encoding {
-            Some(encoding) => encoding.to_string(),
-            None => "".to_string()
+
+        match encoding {
+            Some(encoding) => {
+               if encoding.to_string().contains("gzip") {
+                  "gzip".to_string() 
+               } else {
+                   "".to_string()
+               }
+            },
+            None => "".to_string(),
         }
     }
 }
@@ -192,10 +196,10 @@ fn parse_headers(headers: &[String]) -> HashMap<String, String> {
     for header in &headers[1..] {
         let header = header.split_once(": ");
         match header {
-            Some(header) =>  {
+            Some(header) => {
                 let (key, value) = header;
                 hash.insert(key.to_string(), value.to_string())
-            },
+            }
             None => continue,
         };
     }
