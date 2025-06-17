@@ -2,6 +2,7 @@ use codecrafters_http_server::ThreadPool;
 use std::{
     env, fs,
     io::{prelude::*, BufReader},
+    collections::HashMap,
     net::{TcpListener, TcpStream},
     path::Path,
     sync::Arc,
@@ -33,10 +34,13 @@ fn main() {
     }
 }
 
+
+
 fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
     let mut buf_reader = BufReader::new(&stream);
     let request = buf_reader.fill_buf().unwrap();
     let mut request = parse_request(request);
+    // parse_headers(&request.headers);
 
     let (content, status) = request.parse_endpoint(&dir);
 
@@ -53,13 +57,13 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
 }
 
 struct Request {
-    headers: Vec<String>,
+    headers: HashMap<String, String>,
     body: String,
 }
 
 impl Request {
     fn parse_start_line(&mut self) -> StartLine {
-        let start_line = self.headers.remove(0);
+        let start_line = self.headers.get("Start-Line").unwrap();
         let mut start_line: Vec<&str> = start_line.split_whitespace().collect();
 
         let (_html, endpoint, verb) = (
@@ -83,8 +87,7 @@ impl Request {
         let (content, status) = match start_line.endpoint.as_str() {
             "/" => (Content::new("", "", &encoding), StatusCode::_200),
             "/user-agent" => {
-                let user_agent = self.headers.iter().find(|el| el.contains("User-Agent"));
-                let (_key, user_agent) = user_agent.unwrap().split_once(": ").unwrap();
+                let user_agent = self.headers.get("User-Agent").unwrap();
                 let content = Content::new(user_agent, "text/plain", &encoding);
                 (content, StatusCode::_200)
             }
@@ -123,31 +126,20 @@ impl Request {
     }
 
     fn parse_content_type(&self) -> String {
-        if let Some(content_type) = self
-            .headers
-            .iter()
-            .find(|header| header.contains("Content-Type"))
-        {
-            let (_key, content_type) = content_type.split_once(": ").unwrap();
-            content_type.to_string()
-        } else {
-            "application/octet-stream".to_string()
+        let content_type = self.headers.get("Content-Type");
+
+        match content_type {
+            Some(content_type) => content_type.to_string(),
+            None => "application/octet-stream".to_string()
         }
     }
 
     fn parse_encoding(&self) -> String {
-        if let Some(encoding) = self
-            .headers
-            .iter()
-            .find(|header| header.contains("Accept-Encoding"))
-        {
-            let (_key, encoding) = encoding.split_once(": ").unwrap();
-            match encoding {
-                "gzip" => encoding.to_string(),
-                _ => "".to_string(),
-            }
-        } else {
-            "".to_string()
+        let encoding = self.headers.get("Accept-Encoding");
+        
+                match encoding {
+            Some(encoding) => encoding.to_string(),
+            None => "".to_string()
         }
     }
 }
@@ -187,9 +179,27 @@ fn parse_request(request: &[u8]) -> Request {
     let mut request: Vec<String> = request.lines().map(|result| result.unwrap()).collect();
 
     let body = request.split_off(request.len() - 1).pop().unwrap();
-    let headers = request;
+    let headers = parse_headers(&request);
 
     Request { headers, body }
+}
+
+fn parse_headers(headers: &[String]) -> HashMap<String, String> {
+    let mut hash: HashMap<String, String> = HashMap::new();
+
+    hash.insert("Start-Line".to_string(), headers[0].clone());
+
+    for header in &headers[1..] {
+        let header = header.split_once(": ");
+        match header {
+            Some(header) =>  {
+                let (key, value) = header;
+                hash.insert(key.to_string(), value.to_string())
+            },
+            None => continue,
+        };
+    }
+    hash
 }
 
 struct StartLine {
