@@ -1,9 +1,9 @@
 use codecrafters_http_server::ThreadPool;
 use serde::de::{self, Deserializer};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize};
 use std::{
     collections::HashMap,
-    env, fs,
+    env, fs, fmt,
     io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
     path::Path,
@@ -48,7 +48,7 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
 
     let response = format!(
         "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n",
-        status.as_str(),
+        status,
         request
             .headers
             .content_type
@@ -151,6 +151,8 @@ impl Request {
             .split("/echo/")
             .last()
             .unwrap();
+        self.headers.content_type = Some("text/plain".to_string());
+        self.headers.content_length = Some(message.len());
         self.body = message.as_bytes().to_vec();
         StatusCode::_200
     }
@@ -195,12 +197,12 @@ enum StatusCode {
     _201,
 }
 
-impl StatusCode {
-    fn as_str(&self) -> &'static str {
+impl fmt::Display for StatusCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StatusCode::_200 => "HTTP/1.1 200 OK",
-            StatusCode::_404 => "HTTP/1.1 404 Not Found",
-            StatusCode::_201 => "HTTP/1.1 201 Created",
+            StatusCode::_200 => write!(f, "HTTP/1.1 200 OK"),
+            StatusCode::_404 => write!(f, "HTTP/1.1 404 Not Found"),
+            StatusCode::_201 => write!(f, "HTTP/1.1 201 Created"),
         }
     }
 }
