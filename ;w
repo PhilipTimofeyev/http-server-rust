@@ -1,5 +1,6 @@
 use codecrafters_http_server::ThreadPool;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::{
     collections::HashMap,
     env, fs,
@@ -42,21 +43,15 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
 
     let mut request = parse_request(request);
     let status = request.parse_endpoint(&dir);
-    request.parse_encoding();
+
     buf_reader.consume(length);
 
     let response = format!(
         "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n",
         status.as_str(),
-        request
-            .headers
-            .content_type
-            .unwrap_or_else(|| "Unknown".to_string()),
+        request.headers.content_type.unwrap_or_else(|| "Unknown".to_string()),
         "",
-        request
-            .headers
-            .content_length
-            .unwrap_or_else(|| "Unknown".to_string()),
+        request.headers.content_length.unwrap_or_else(|| "Unknown".to_string()),
     );
     stream.write_all(response.as_bytes()).unwrap();
     stream.write_all(&request.body).unwrap();
@@ -102,66 +97,77 @@ impl Request {
 
     fn parse_endpoint(&mut self, dir: &str) -> StatusCode {
         let start_line = self.parse_start_line();
+        self.headers.accept_encoding = Some(self.parse_encoding());
 
-        match start_line.endpoint.as_str() {
+        let status = match start_line.endpoint.as_str() {
             "/" => StatusCode::_200,
-            "/user-agent" => self.handle_user_agent(),
-            endpoint if endpoint.contains("/echo") => self.handle_echo(start_line),
+            "/user-agent" => {
+                let user_agent = self.headers.user_agent.clone().unwrap_or_default();
+                self.body = user_agent.as_bytes().to_vec();
+                StatusCode::_200
+            },
+            endpoint if endpoint.contains("/echo") => {
+                let message = endpoint.split("/echo/").last().unwrap();
+                self.body = message.as_bytes().to_vec();
+                StatusCode::_200
+            }
             endpoint if endpoint.contains("/files") => {
                 let filename = endpoint.split("/files/").last().unwrap();
                 let filepath = format!("{dir}{filename}");
                 let filepath = Path::new(&filepath);
 
                 match start_line.verb {
-                    Verb::GET => self.handle_get_file(filepath),
-                    Verb::POST => self.handle_post_file(filepath),
+                    Verb::GET => {
+                        let file = fs::read(filepath);
+                        if let Ok(file) = file {
+                            self.body = file;
+                            StatusCode::_200
+                        } else {
+                            StatusCode::_404
+                        }
+                    }
+                    Verb::POST => {
+                        let _ = fs::write(filepath, &self.body);
+                        self.headers.content_length = Some(self.body.len().to_string());
+                        StatusCode::_201
+                    }
                 }
             }
-            _ => StatusCode::_404,
-        }
+            _ => {
+                return StatusCode::_404;
+            }
+        };
+        status
     }
 
-    fn handle_user_agent(&mut self) -> StatusCode {
-        let user_agent = self.headers.user_agent.clone().unwrap_or_default();
-        self.body = user_agent.as_bytes().to_vec();
-        StatusCode::_200
-    }
+    // fn handle_user_agent(&self) -> String {
+    //     let user_agent = &self.headers.user_agent.clone().map_or("".to_string(), |agent| agent);
+    //     let content = Content::new(user_agent.to_vec(), "text/plain", encoding);
+    //     (content, StatusCode::_200)
+    // }
+    // //
+    // fn parse_content_type(&self) -> String {
+    //     let content_type = self.headers.get("Content-Type");
+    //
+    //     match content_type {
+    //         Some(content_type) => content_type.to_string(),
+    //         None => "application/octet-stream".to_string(),
+    //     }
+    // }
+    //
+    fn parse_encoding(&self) -> String {
+        // let encoding = self.headers.get("Accept-Encoding");
 
-    fn handle_echo(&mut self, startline: StartLine) -> StatusCode {
-        let message = startline.endpoint.split("/echo/").last().unwrap();
-        self.body = message.as_bytes().to_vec();
-        StatusCode::_200
-    }
-
-    fn handle_get_file(&mut self, filepath: &Path) -> StatusCode {
-        let file = fs::read(filepath);
-        if let Ok(file) = file {
-            self.body = file;
-            StatusCode::_200
-        } else {
-            StatusCode::_404
-        }
-    }
-
-    fn handle_post_file(&mut self, filepath: &Path) -> StatusCode {
-        let _ = fs::write(filepath, &self.body);
-        self.headers.content_length = Some(self.body.len().to_string());
-        StatusCode::_201
-    }
-
-    fn parse_encoding(&mut self) {
-        let encoding = match &self.headers.accept_encoding {
+        match &self.headers.accept_encoding {
             Some(encoding) => {
                 if encoding.to_string().contains("gzip") {
-                    Some("".to_string())
+                    "".to_string()
                 } else {
-                    Some("".to_string())
+                    "".to_string()
                 }
             }
-            None => Some("".to_string()),
-        };
-
-        self.headers.accept_encoding = encoding;
+            None => "".to_string(),
+        }
     }
 }
 
@@ -204,13 +210,13 @@ fn parse_request(request: &[u8]) -> Request {
         .collect();
 
     let headers = parse_headers(headers);
+    // println!("{:?}", headers);
     let json_string = serde_json::to_string(&headers).unwrap();
     let headers: Headers = serde_json::from_str(&json_string).unwrap();
+    // println!("{:?}", hmm);
 
-    let content_length = headers
-        .content_length
-        .clone()
-        .map_or(0, |i| i.parse::<usize>().unwrap_or(0));
+    // let content_length = headers.get("Content-Length");
+    let content_length = headers.content_length.clone().map_or(0, |i| i.parse::<usize>().unwrap_or(0));
 
     let body_start = request.len() - content_length;
     let body_end = body_start + content_length;
@@ -244,3 +250,26 @@ struct StartLine {
     verb: Verb,
     endpoint: String,
 }
+
+// #[derive(Debug)]
+// struct Content {
+//     body: String,
+//     content_type: String,
+//     length: usize,
+//     encoding: String,
+// }
+
+// impl Content {
+//     fn new(body: , content_type: &str, encoding: String) -> Content {
+//         let content_type = content_type.to_string();
+//         let length = body.len();
+//         // let encoding = encoding.to_string();
+//
+//         Content {
+//             body,
+//             content_type,
+//             length,
+//             encoding,
+//         }
+//     }
+// }
