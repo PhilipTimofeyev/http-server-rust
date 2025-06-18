@@ -36,27 +36,28 @@ fn main() {
 
 fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
     let mut buf_reader = BufReader::new(&stream);
-    let request = buf_reader.fill_buf().unwrap();
-    let mut request = parse_request(request);
-    // parse_headers(&request.headers);
+    let requests = buf_reader.fill_buf().unwrap();
+    let length = requests.len();
 
+    let mut request = parse_request(requests);
     let (content, status) = request.parse_endpoint(&dir);
 
+    buf_reader.consume(length);
+
     let response = format!(
-        "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n{}",
+        "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n",
         status.as_str(),
         content.content_type,
         content.encoding,
         content.length,
-        content.content
     );
-
     stream.write_all(response.as_bytes()).unwrap();
+    stream.write_all(&content.content).unwrap();
 }
 
 struct Request {
     headers: HashMap<String, String>,
-    body: String,
+    body: Vec<u8>,
 }
 
 impl Request {
@@ -81,17 +82,21 @@ impl Request {
 
     fn parse_endpoint(&mut self, dir: &str) -> (Content, StatusCode) {
         let start_line = self.parse_start_line();
+        // println!("{:?}", start_line);
         let encoding = self.parse_encoding();
         let (content, status) = match start_line.endpoint.as_str() {
-            "/" => (Content::new("", "", &encoding), StatusCode::_200),
+            "/" => (Content::new(Vec::new(), "", &encoding), StatusCode::_200),
             "/user-agent" => {
                 let user_agent = self.headers.get("User-Agent").unwrap();
+                let user_agent = user_agent.as_bytes().to_vec();
                 let content = Content::new(user_agent, "text/plain", &encoding);
                 (content, StatusCode::_200)
             }
             endpoint if endpoint.contains("/echo") => {
                 let message = endpoint.split("/echo/").last().unwrap();
+                let message = message.as_bytes().to_vec();
                 let content = Content::new(message, "text/plain", &encoding);
+                println! {"{:?}", content};
                 (content, StatusCode::_200)
             }
             endpoint if endpoint.contains("/files") => {
@@ -101,23 +106,29 @@ impl Request {
 
                 match start_line.verb {
                     Verb::GET => {
-                        let read_file = fs::read_to_string(filepath);
+                        let read_file = fs::read(filepath);
                         let content_type = self.parse_content_type();
                         if let Ok(read_file) = read_file {
-                            let content = Content::new(&read_file, &content_type, &encoding);
+                            let content = Content::new(read_file, &content_type, &encoding);
                             (content, StatusCode::_200)
                         } else {
-                            (Content::new("", "", &encoding), StatusCode::_404)
+                            (Content::new(Vec::new(), "", &encoding), StatusCode::_404)
                         }
                     }
                     Verb::POST => {
                         let _ = fs::write(filepath, &self.body);
-                        (Content::new("", "", &encoding), StatusCode::_201)
+                        let content_length = self.body.len();
+                        let content = Content::new(Vec::new(), "", &encoding);
+                        let content = Content {
+                            length: content_length,
+                            ..content
+                        };
+                        (content, StatusCode::_201)
                     }
                 }
             }
             _ => {
-                return (Content::new("", "", &encoding), StatusCode::_404);
+                return (Content::new(Vec::new(), "", &encoding), StatusCode::_404);
             }
         };
         (content, status)
@@ -137,12 +148,12 @@ impl Request {
 
         match encoding {
             Some(encoding) => {
-               if encoding.to_string().contains("gzip") {
-                  "gzip".to_string() 
-               } else {
-                   "".to_string()
-               }
-            },
+                if encoding.to_string().contains("gzip") {
+                    "".to_string()
+                } else {
+                    "".to_string()
+                }
+            }
             None => "".to_string(),
         }
     }
@@ -164,7 +175,7 @@ impl StatusCode {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum Verb {
     GET,
     POST,
@@ -180,10 +191,23 @@ fn parse_args(args: Vec<String>) -> String {
 }
 
 fn parse_request(request: &[u8]) -> Request {
-    let mut request: Vec<String> = request.lines().map(|result| result.unwrap()).collect();
+    let headers: Vec<String> = request
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
 
-    let body = request.split_off(request.len() - 1).pop().unwrap();
-    let headers = parse_headers(&request);
+    let headers = parse_headers(&headers);
+    let content_length = headers.get("Content-Length");
+    let content_length = match content_length {
+        Some(content_length) => content_length.parse::<usize>().unwrap_or(0),
+        None => 0,
+    };
+
+    let body_start = request.len() - content_length;
+    let body_end = body_start + content_length;
+    let body = &request[body_start..body_end];
+    let body = body.to_vec();
 
     Request { headers, body }
 }
@@ -206,21 +230,22 @@ fn parse_headers(headers: &[String]) -> HashMap<String, String> {
     hash
 }
 
+#[derive(Debug)]
 struct StartLine {
     verb: Verb,
     endpoint: String,
 }
 
+#[derive(Debug)]
 struct Content {
-    content: String,
+    content: Vec<u8>,
     content_type: String,
     length: usize,
     encoding: String,
 }
 
 impl Content {
-    fn new(content: &str, content_type: &str, encoding: &str) -> Content {
-        let content = content.to_string();
+    fn new(content: Vec<u8>, content_type: &str, encoding: &str) -> Content {
         let content_type = content_type.to_string();
         let length = content.len();
         let encoding = encoding.to_string();
