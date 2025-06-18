@@ -1,4 +1,5 @@
 use codecrafters_http_server::ThreadPool;
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -53,10 +54,7 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
             .content_type
             .unwrap_or_else(|| "Unknown".to_string()),
         "",
-        request
-            .headers
-            .content_length
-            .unwrap_or_else(|| "Unknown".to_string()),
+        request.headers.content_length.unwrap_or(0),
     );
     stream.write_all(response.as_bytes()).unwrap();
     stream.write_all(&request.body).unwrap();
@@ -67,52 +65,70 @@ struct Request {
     body: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Headers {
+    #[serde(deserialize_with = "string_to_startline")]
     #[serde(rename = "Start-Line")]
-    start_line: String,
+    start_line: StartLine,
     #[serde(rename = "Accept-Encoding")]
     accept_encoding: Option<String>,
     #[serde(rename = "User-Agent")]
     user_agent: Option<String>,
     #[serde(rename = "Content-Type")]
     content_type: Option<String>,
+    #[serde(default)]
+    #[serde(deserialize_with = "string_to_option_usize")]
     #[serde(rename = "Content-Length")]
-    content_length: Option<String>,
+    content_length: Option<usize>,
+}
+
+fn string_to_option_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<&str> = Option::deserialize(deserializer)?;
+    match s {
+        Some(text) if !text.is_empty() => {
+            text.parse::<usize>().map(Some).map_err(de::Error::custom)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn string_to_startline<'de, D>(deserializer: D) -> Result<StartLine, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: &str = Deserialize::deserialize(deserializer)?;
+
+            let mut start_line: Vec<&str> = s.split_whitespace().collect();
+            let (_html, endpoint, verb) = (
+                start_line.pop().unwrap().to_string(),
+                start_line.pop().unwrap().to_string(),
+                start_line.pop().unwrap(),
+            );
+
+            let verb = match verb {
+                "GET" => Verb::GET,
+                "POST" => Verb::POST,
+                &_ => todo!(),
+            };
+
+            Ok(StartLine { verb, endpoint })
 }
 
 impl Request {
-    fn parse_start_line(&mut self) -> StartLine {
-        let mut start_line: Vec<&str> = self.headers.start_line.split_whitespace().collect();
-
-        let (_html, endpoint, verb) = (
-            start_line.pop().unwrap().to_string(),
-            start_line.pop().unwrap().to_string(),
-            start_line.pop().unwrap(),
-        );
-
-        let verb = match verb {
-            "GET" => Verb::GET,
-            "POST" => Verb::POST,
-            &_ => todo!(),
-        };
-
-        StartLine { verb, endpoint }
-    }
-
     fn parse_endpoint(&mut self, dir: &str) -> StatusCode {
-        let start_line = self.parse_start_line();
-
-        match start_line.endpoint.as_str() {
+        match self.headers.start_line.endpoint.as_str() {
             "/" => StatusCode::_200,
             "/user-agent" => self.handle_user_agent(),
-            endpoint if endpoint.contains("/echo") => self.handle_echo(start_line),
+            endpoint if endpoint.contains("/echo") => self.handle_echo(),
             endpoint if endpoint.contains("/files") => {
                 let filename = endpoint.split("/files/").last().unwrap();
                 let filepath = format!("{dir}{filename}");
                 let filepath = Path::new(&filepath);
 
-                match start_line.verb {
+                match self.headers.start_line.verb {
                     Verb::GET => self.handle_get_file(filepath),
                     Verb::POST => self.handle_post_file(filepath),
                 }
@@ -127,8 +143,14 @@ impl Request {
         StatusCode::_200
     }
 
-    fn handle_echo(&mut self, startline: StartLine) -> StatusCode {
-        let message = startline.endpoint.split("/echo/").last().unwrap();
+    fn handle_echo(&mut self) -> StatusCode {
+        let message = self
+            .headers
+            .start_line
+            .endpoint
+            .split("/echo/")
+            .last()
+            .unwrap();
         self.body = message.as_bytes().to_vec();
         StatusCode::_200
     }
@@ -136,6 +158,8 @@ impl Request {
     fn handle_get_file(&mut self, filepath: &Path) -> StatusCode {
         let file = fs::read(filepath);
         if let Ok(file) = file {
+            self.headers.content_type = Some("application/octet-stream".to_string());
+            self.headers.content_length = Some(file.len());
             self.body = file;
             StatusCode::_200
         } else {
@@ -145,7 +169,7 @@ impl Request {
 
     fn handle_post_file(&mut self, filepath: &Path) -> StatusCode {
         let _ = fs::write(filepath, &self.body);
-        self.headers.content_length = Some(self.body.len().to_string());
+        self.headers.content_length = Some(self.body.len());
         StatusCode::_201
     }
 
@@ -207,13 +231,8 @@ fn parse_request(request: &[u8]) -> Request {
     let json_string = serde_json::to_string(&headers).unwrap();
     let headers: Headers = serde_json::from_str(&json_string).unwrap();
 
-    let content_length = headers
-        .content_length
-        .clone()
-        .map_or(0, |i| i.parse::<usize>().unwrap_or(0));
-
-    let body_start = request.len() - content_length;
-    let body_end = body_start + content_length;
+    let body_start = request.len() - headers.content_length.unwrap_or(0);
+    let body_end = body_start + headers.content_length.unwrap_or(0);
     let body = &request[body_start..body_end];
     let body = body.to_vec();
 
@@ -240,6 +259,7 @@ fn parse_headers(headers: Vec<String>) -> HashMap<String, String> {
     headers_hash
 }
 
+#[derive(Debug)]
 struct StartLine {
     verb: Verb,
     endpoint: String,
