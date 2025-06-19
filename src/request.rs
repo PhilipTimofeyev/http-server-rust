@@ -1,18 +1,10 @@
-use codecrafters_http_server::ThreadPool;
-// use flate2::write::GzEncoder;
-// use flate2::Compression;
 use crate::codec::Encoder;
+use crate::response::{Response, ResponseHeaders};
 use crate::status::StatusCode;
 use serde::de::{self, Deserializer};
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    env, fmt, fs,
-    io::{prelude::*, BufReader},
-    net::{TcpListener, TcpStream},
-    path::Path,
-    sync::Arc,
-};
+use std::io::prelude::*;
+use std::{collections::HashMap, fs, path::Path};
 
 pub struct Request {
     pub request_line: RequestLine,
@@ -36,61 +28,83 @@ pub struct Headers {
     pub content_length: Option<usize>,
 }
 
-#[derive(PartialEq, Debug)]
-pub enum Verb {
-    GET,
-    POST,
-}
-
 #[derive(Debug)]
 pub struct RequestLine {
     pub verb: Verb,
     pub endpoint: String,
 }
 
-fn string_to_option_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s: Option<&str> = Option::deserialize(deserializer)?;
-    match s {
-        Some(text) if !text.is_empty() => {
-            text.parse::<usize>().map(Some).map_err(de::Error::custom)
-        }
-        _ => Ok(None),
+#[derive(PartialEq, Debug)]
+pub enum Verb {
+    GET,
+    POST,
+}
+
+pub fn parse_request(request: &[u8]) -> Request {
+    let mut headers: Vec<String> = request
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+
+    let request_line = headers.remove(0);
+    let request_line = parse_request_line(request_line);
+
+    let headers = parse_headers(headers);
+    let json_request = serde_json::to_string(&headers).unwrap();
+    let headers: Headers = serde_json::from_str(&json_request).unwrap();
+
+    let body_start = request.len() - headers.content_length.unwrap_or(0);
+    let body_end = request.len();
+
+    let body = &request[body_start..body_end];
+    let body = body.to_vec();
+
+    Request {
+        request_line,
+        headers,
+        body,
     }
 }
 
-fn encoder_type<'de, D>(deserializer: D) -> Result<Option<Encoder>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s: Option<&str> = Option::deserialize(deserializer)?;
-    match s {
-        Some(encoder) if !encoder.is_empty() => match encoder {
-            encoder if encoder.contains("gzip") => Ok(Some(Encoder::Gzip)),
-            &_ => Ok(None),
-        },
-        _ => Ok(None),
+fn parse_headers(headers: Vec<String>) -> HashMap<String, String> {
+    let mut headers_hash: HashMap<String, String> = HashMap::new();
+
+    for header in &headers[1..] {
+        let header = header.split_once(": ");
+        match header {
+            Some(header) => {
+                let (key, value) = header;
+                headers_hash.insert(key.to_string(), value.to_string())
+            }
+            None => continue,
+        };
     }
+
+    headers_hash
+}
+
+fn parse_request_line(request_line: String) -> RequestLine {
+    let mut request_line: Vec<&str> = request_line.split_whitespace().collect();
+    let (_html, endpoint, verb) = (
+        request_line.pop().unwrap().to_string(),
+        request_line.pop().unwrap().to_string(),
+        request_line.pop().unwrap(),
+    );
+
+    let verb = match verb {
+        "GET" => Verb::GET,
+        "POST" => Verb::POST,
+        &_ => todo!(),
+    };
+
+    RequestLine { verb, endpoint }
 }
 
 impl Request {
     pub fn handle_request(&mut self, dir: &str) -> Response {
         match self.request_line.endpoint.as_str() {
-            "/" => {
-                let content_encoding = self.headers.accept_encoding.take();
-                let response_headers = ResponseHeaders {
-                    content_type: None,
-                    content_length: None,
-                    content_encoding,
-                };
-                Response {
-                    status_line: StatusCode::_200,
-                    headers: response_headers,
-                    body: None,
-                }
-            }
+            "/" => self.handle_root(),
             "/user-agent" => self.handle_user_agent(),
             endpoint if endpoint.contains("/echo") => self.handle_echo(),
             endpoint if endpoint.contains("/files") => {
@@ -115,6 +129,19 @@ impl Request {
                     body: None,
                 }
             }
+        }
+    }
+
+    fn handle_root(&mut self) -> Response {
+        let response_headers = ResponseHeaders {
+            content_type: None,
+            content_length: None,
+            content_encoding: None,
+        };
+        Response {
+            status_line: StatusCode::_200,
+            headers: response_headers,
+            body: None,
         }
     }
 
@@ -203,32 +230,29 @@ impl Request {
     }
 }
 
-pub struct Response {
-    pub status_line: StatusCode,
-    pub headers: ResponseHeaders,
-    pub body: Option<Vec<u8>>,
-}
-
-impl Response {
-    pub fn build_response_header(&mut self) -> String {
-        format!(
-            "{}\r\nContent-Type: {}\r\nContent-Encoding: {}\r\nContent-Length: {}\r\n\r\n",
-            self.status_line,
-            self.headers
-                .content_type
-                .take()
-                .unwrap_or_else(|| "text/plain".to_string()),
-            self.headers
-                .content_encoding
-                .take()
-                .map_or("".to_string(), |a| a.to_string()),
-            self.headers.content_length.unwrap_or_default(),
-        )
+fn string_to_option_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<&str> = Option::deserialize(deserializer)?;
+    match s {
+        Some(text) if !text.is_empty() => {
+            text.parse::<usize>().map(Some).map_err(de::Error::custom)
+        }
+        _ => Ok(None),
     }
 }
 
-pub struct ResponseHeaders {
-    pub content_type: Option<String>,
-    pub content_length: Option<usize>,
-    pub content_encoding: Option<Encoder>,
+fn encoder_type<'de, D>(deserializer: D) -> Result<Option<Encoder>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<&str> = Option::deserialize(deserializer)?;
+    match s {
+        Some(encoder) if !encoder.is_empty() => match encoder {
+            encoder if encoder.contains("gzip") => Ok(Some(Encoder::Gzip)),
+            &_ => Ok(None),
+        },
+        _ => Ok(None),
+    }
 }
