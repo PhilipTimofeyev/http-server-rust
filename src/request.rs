@@ -49,7 +49,6 @@ pub fn parse_request(request: &[u8]) -> Request {
         .take_while(|line| !line.is_empty())
         .collect();
 
-    println!("{:?}", headers);
     let request_line = if !headers.is_empty() {
         headers.remove(0)
     } else {

@@ -73,5 +73,3 @@ fn parse_args(args: Vec<String>) -> String {
         "".to_string()
     }
 }
-
-

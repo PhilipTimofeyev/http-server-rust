@@ -24,7 +24,7 @@ impl Response {
             self.headers
                 .content_encoding
                 .take()
-                .map_or("".to_string(), |a| a.to_string()),
+                .map_or("".to_string(), |encoding| encoding.to_string()),
             self.headers.content_length.unwrap_or_default(),
             self.headers.connection.take().unwrap_or("keep-alive".to_string()),
         )
