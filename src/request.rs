@@ -26,6 +26,8 @@ pub struct Headers {
     #[serde(deserialize_with = "string_to_option_usize")]
     #[serde(rename = "Content-Length")]
     pub content_length: Option<usize>,
+    #[serde(rename = "Accept-Encoding")]
+    pub connection: Option<String>,
 }
 
 #[derive(Debug)]
@@ -47,7 +49,12 @@ pub fn parse_request(request: &[u8]) -> Request {
         .take_while(|line| !line.is_empty())
         .collect();
 
-    let request_line = headers.remove(0);
+    println!("{:?}", headers);
+    let request_line = if !headers.is_empty() {
+        headers.remove(0)
+    } else {
+        "".to_string()
+    };
     let request_line = parse_request_line(request_line);
 
     let headers = parse_headers(headers);
@@ -122,6 +129,7 @@ impl Request {
                     content_type: None,
                     content_length: None,
                     content_encoding: None,
+                    connection: None,
                 };
                 Response {
                     status_line: StatusCode::_404,
@@ -137,6 +145,7 @@ impl Request {
             content_type: None,
             content_length: None,
             content_encoding: None,
+            connection: None,
         };
         Response {
             status_line: StatusCode::_200,
@@ -149,13 +158,16 @@ impl Request {
         let user_agent = self.headers.user_agent.take().unwrap_or_default();
         let body = user_agent.as_bytes().to_vec();
         let content_length = Some(body.len());
+        let content_type = Some("text/plain".to_string());
         let content_encoding = self.headers.accept_encoding.take();
         let body = Some(body);
+        let connection = self.headers.connection.take();
 
         let response_headers = ResponseHeaders {
-            content_type: None,
+            content_type,
             content_length,
             content_encoding,
+            connection,
         };
 
         Response {
@@ -171,11 +183,13 @@ impl Request {
         let content_length = Some(message.len());
         let content_encoding = self.headers.accept_encoding.take();
         let body = Some(message.as_bytes().to_vec());
+        let connection = self.headers.connection.take();
 
         let response_headers = ResponseHeaders {
             content_type,
             content_length,
             content_encoding,
+            connection,
         };
         Response {
             status_line: StatusCode::_200,
@@ -190,11 +204,13 @@ impl Request {
             let content_type = Some("application/octet-stream".to_string());
             let content_length = Some(file.len());
             let body = Some(file);
+        let connection = self.headers.connection.take();
 
             let response_headers = ResponseHeaders {
                 content_type,
                 content_length,
                 content_encoding: None,
+                connection,
             };
             Response {
                 status_line: StatusCode::_200,
@@ -206,6 +222,7 @@ impl Request {
                 content_type: None,
                 content_length: None,
                 content_encoding: None,
+                connection: None,
             };
             Response {
                 status_line: StatusCode::_404,
@@ -217,10 +234,12 @@ impl Request {
 
     fn handle_post_file(&mut self, filepath: &Path) -> Response {
         let _ = fs::write(filepath, &self.body);
+        let connection = self.headers.connection.take();
         let response_headers = ResponseHeaders {
             content_type: None,
             content_length: None,
             content_encoding: None,
+            connection,
         };
         Response {
             status_line: StatusCode::_201,

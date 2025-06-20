@@ -35,34 +35,42 @@ fn main() {
 }
 
 fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
-    let mut buf_reader = BufReader::new(&stream);
-    let request = buf_reader.fill_buf().unwrap();
-    let length = request.len();
+    let mut buf_reader = BufReader::new(stream.try_clone().unwrap());
 
-    let mut request = request::parse_request(request);
-    let mut response = request.handle_request(&dir);
+    loop {
+        let request = buf_reader.fill_buf().unwrap();
+        let length = request.len();
 
-    if let Some(encoder) = &response.headers.content_encoding {
-        match encoder {
-            codec::Encoder::Gzip => {
-                if let Some(body) = response.body.take() {
-                    let encoded = codec::gzip_encoder(body);
-                    let content_length = encoded.len();
-
-                    response.body = Some(encoded);
-                    response.headers.content_length = Some(content_length);
-                }
-            }
+        let headers_present = request.windows(4).any(|w| w == b"\r\n\r\n");
+        if !headers_present {
+            buf_reader.consume(length);
+            continue;
         };
-    };
 
-    buf_reader.consume(length);
+        let mut request = request::parse_request(request);
+        let mut response = request.handle_request(&dir);
+        if let Some(encoder) = &response.headers.content_encoding {
+            match encoder {
+                codec::Encoder::Gzip => {
+                    if let Some(body) = response.body.take() {
+                        let encoded = codec::gzip_encoder(body);
+                        let content_length = encoded.len();
 
-    let response_header = response.build_response_header();
-    let response_body = response.body.unwrap_or_default();
+                        response.body = Some(encoded);
+                        response.headers.content_length = Some(content_length);
+                    }
+                }
+            };
+        };
 
-    stream.write_all(response_header.as_bytes()).unwrap();
-    stream.write_all(&response_body).unwrap()
+        buf_reader.consume(length);
+
+        let response_header = response.build_response_header();
+        let response_body = response.body.unwrap_or_default();
+
+        stream.write_all(response_header.as_bytes()).unwrap();
+        stream.write_all(&response_body).unwrap()
+    }
 }
 
 fn parse_args(args: Vec<String>) -> String {
