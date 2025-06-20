@@ -1,4 +1,4 @@
-use codecrafters_http_server::ThreadPool;
+use http_server::ThreadPool;
 use std::{
     env,
     io::{prelude::*, BufReader},
@@ -9,13 +9,14 @@ pub mod codec;
 pub mod request;
 pub mod response;
 pub mod status;
+use anyhow::Result;
 
-fn main() {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let dir_arg = parse_args(args);
     let shared_dir = Arc::new(dir_arg);
 
-    let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:4221")?;
     let pool = ThreadPool::new(4);
 
     for stream in listener.incoming() {
@@ -29,6 +30,8 @@ fn main() {
     }
 
     println!("Shutting down.");
+
+    Ok(())
 }
 
 fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
@@ -62,7 +65,7 @@ fn handle_connection(mut stream: TcpStream, dir: Arc<String>) {
         if connection_is_closed {
             stream.shutdown(Shutdown::Both).unwrap()
         };
-    }
+    };
 }
 
 fn parse_args(args: Vec<String>) -> String {
