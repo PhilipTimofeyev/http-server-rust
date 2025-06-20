@@ -2,6 +2,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fmt;
 use std::io::Write;
+use crate::response;
 
 #[derive(Debug)]
 pub enum Encoder {
@@ -20,6 +21,21 @@ pub fn gzip_encoder(data: Vec<u8>) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&data).unwrap();
     encoder.finish().unwrap()
-    // self.headers.content_length = Some(compressed_body.len());
-    // self.body = compressed_body;
+}
+
+pub fn encode(response: &mut response::Response) {
+        if let Some(encoder) = &response.headers.content_encoding {
+            match encoder {
+                Encoder::Gzip => {
+                    if let Some(body) = response.body.take() {
+                        let encoded = gzip_encoder(body);
+                        let content_length = encoded.len();
+
+                        response.body = Some(encoded);
+                        response.headers.content_length = Some(content_length);
+                    }
+                }
+            };
+        };
+
 }

@@ -26,7 +26,7 @@ pub struct Headers {
     #[serde(deserialize_with = "string_to_option_usize")]
     #[serde(rename = "Content-Length")]
     pub content_length: Option<usize>,
-    #[serde(rename = "Accept-Encoding")]
+    #[serde(rename = "Connection")]
     pub connection: Option<String>,
 }
 
@@ -129,7 +129,7 @@ impl Request {
                     content_type: None,
                     content_length: None,
                     content_encoding: None,
-                    connection: None,
+                    connection: self.headers.connection.take(),
                 };
                 Response {
                     status_line: StatusCode::_404,
@@ -145,7 +145,7 @@ impl Request {
             content_type: None,
             content_length: None,
             content_encoding: None,
-            connection: None,
+            connection: self.headers.connection.take(),
         };
         Response {
             status_line: StatusCode::_200,
@@ -204,7 +204,7 @@ impl Request {
             let content_type = Some("application/octet-stream".to_string());
             let content_length = Some(file.len());
             let body = Some(file);
-        let connection = self.headers.connection.take();
+            let connection = self.headers.connection.take();
 
             let response_headers = ResponseHeaders {
                 content_type,
